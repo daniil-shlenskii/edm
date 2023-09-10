@@ -9,7 +9,11 @@
 "Elucidating the Design Space of Diffusion-Based Generative Models"."""
 
 import torch
+import torch.nn.functional as F
+import torchvision.transforms as T
+from torch import Tensor
 from torch_utils import persistence
+from training.nn import LearnableTimesteps
 
 #----------------------------------------------------------------------------
 # Loss function corresponding to the variance preserving (VP) formulation
@@ -80,3 +84,42 @@ class EDMLoss:
         return loss
 
 #----------------------------------------------------------------------------
+
+@persistence.persistent_class
+class LinearKID:
+    def __init__(self, sampler, image_to_timesteps: LearnableTimesteps):
+        self.sampler = sampler
+        self.image_to_timesteps = image_to_timesteps
+        self._feature_extractor = self._get_feature_extractor()
+    
+    def __call__(self, net, images, labels=None, augment_pipe=None):
+        if next(self._feature_extractor.parameters()).device != images.device:
+            self._feature_extractor.to(images.device)
+        b_size = images.shape[0]
+        latents = torch.randn_like(images)
+        timesteps = self.image_to_timesteps(images)
+        xq = self.encoder(images).view(b_size, -1)
+        print(f"{xq.shape}")
+        xp = self.encoder(self.sampler(net, latents, timesteps)).view(b_size, -1).to(xq.dtype)
+
+        add1 = torch.einsum("is,js->ij", xp, xp)
+        add1 = add1 - torch.diag(torch.diag(add1))
+
+        add2 = torch.einsum("is,js->ij", xp, xq)
+
+        return add1.mean() - 2 * add2.mean()
+
+    def _get_feature_extractor(self):
+        model = torch.hub.load('pytorch/vision:v0.10.0', 'inception_v3', pretrained=True)
+        # model.avgpool = torch.nn.Identity()
+        model.dropout = torch.nn.Identity()
+        model.fc = torch.nn.Identity()
+        model.eval()
+        return model
+
+    def encoder(self, image: Tensor):
+        image = image - image.min()
+        image = image / image.max()
+        image = F.interpolate(image, size=(224, 224), mode="area")
+        image = T.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225))(image)
+        return self._feature_extractor(image)

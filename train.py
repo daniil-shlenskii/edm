@@ -16,6 +16,7 @@ import torch
 import dnnlib
 from torch_utils import distributed as dist
 from training import training_loop
+from samplers import ddim_sampler
 
 import warnings
 warnings.filterwarnings('ignore', 'Grad strides do not match bucket view strides') # False warning printed by PyTorch 1.12.
@@ -46,6 +47,7 @@ def parse_int_list(s):
 @click.option('--cond',          help='Train class-conditional model', metavar='BOOL',              type=bool, default=False, show_default=True)
 @click.option('--arch',          help='Network architecture', metavar='ddpmpp|ncsnpp|adm',          type=click.Choice(['ddpmpp', 'ncsnpp', 'adm']), default='ddpmpp', show_default=True)
 @click.option('--precond',       help='Preconditioning & loss function', metavar='vp|ve|edm',       type=click.Choice(['vp', 've', 'edm']), default='edm', show_default=True)
+@click.option('--lts',       help='Learn throug sampling', metavar='vp|ve|edm',                     type=bool, default=False, show_default=True)
 
 # Hyperparameters.
 @click.option('--duration',      help='Training duration', metavar='MIMG',                          type=click.FloatRange(min=0, min_open=True), default=200, show_default=True)
@@ -134,6 +136,18 @@ def main(**kwargs):
         assert opts.precond == 'edm'
         c.network_kwargs.class_name = 'training.networks.EDMPrecond'
         c.loss_kwargs.class_name = 'training.loss.EDMLoss'
+    
+    if opts.lts:
+        c.loss_kwargs.class_name = 'training.loss.LinearKID'
+        c.loss_kwargs.sampler = {
+            'class_name': 'samplers.Sampler',
+            'name': 'ddim',
+        }
+        c.loss_kwargs.image_to_timesteps = {
+            'class_name': 'training.nn.LearableTimestepsDefault',
+            'n_steps': 12,
+        }
+        # c.loss_kwargs.encoder = None
 
     # Network options.
     if opts.cbase is not None:

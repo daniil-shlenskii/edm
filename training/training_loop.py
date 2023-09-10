@@ -83,13 +83,18 @@ def training_loop(
 
     # Setup optimizer.
     dist.print0('Setting up optimizer...')
+    # TODO: get encoder and process new loss fn
     loss_fn = dnnlib.util.construct_class_by_name(**loss_kwargs) # training.loss.(VP|VE|EDM)Loss
-    optimizer = dnnlib.util.construct_class_by_name(params=net.parameters(), **optimizer_kwargs) # subclass of torch.optim.Optimizer
+    if loss_kwargs["class_name"] == "training.loss.LinearKID":
+        optimizer = dnnlib.util.construct_class_by_name(params=loss_fn.image_to_timesteps.parameters(), **optimizer_kwargs) # subclass of torch.optim.Optimizer
+    else:
+        optimizer = dnnlib.util.construct_class_by_name(params=net.parameters(), **optimizer_kwargs) # subclass of torch.optim.Optimizer
     augment_pipe = dnnlib.util.construct_class_by_name(**augment_kwargs) if augment_kwargs is not None else None # training.augment.AugmentPipe
-    ddp = torch.nn.parallel.DistributedDataParallel(net, device_ids=[device], broadcast_buffers=False)
+    ddp = torch.nn.parallel.DistributedDataParallel(net, device_ids=[device], broadcast_buffers=False, find_unused_parameters=True)
     ema = copy.deepcopy(net).eval().requires_grad_(False)
 
     # Resume training from previous snapshot.
+    # TODO: how to get previous snapshots?
     if resume_pkl is not None:
         dist.print0(f'Loading network weights from "{resume_pkl}"...')
         if dist.get_rank() != 0:
@@ -128,15 +133,18 @@ def training_loop(
                 images = images.to(device).to(torch.float32) / 127.5 - 1
                 labels = labels.to(device)
                 loss = loss_fn(net=ddp, images=images, labels=labels, augment_pipe=augment_pipe)
+
                 training_stats.report('Loss/loss', loss)
-                loss.sum().mul(loss_scaling / batch_gpu_total).backward()
+                loss = loss.sum().mul(loss_scaling / batch_gpu_total)
+                loss.backward()
 
         # Update weights.
-        for g in optimizer.param_groups:
-            g['lr'] = optimizer_kwargs['lr'] * min(cur_nimg / max(lr_rampup_kimg * 1000, 1e-8), 1)
-        for param in net.parameters():
-            if param.grad is not None:
-                torch.nan_to_num(param.grad, nan=0, posinf=1e5, neginf=-1e5, out=param.grad)
+        if not loss_kwargs["class_name"] == "training.loss.LinearKID":
+            for g in optimizer.param_groups:
+                g['lr'] = optimizer_kwargs['lr'] * min(cur_nimg / max(lr_rampup_kimg * 1000, 1e-8), 1)
+            for param in net.parameters():
+                if param.grad is not None:
+                    torch.nan_to_num(param.grad, nan=0, posinf=1e5, neginf=-1e5, out=param.grad)
         optimizer.step()
 
         # Update EMA.
@@ -165,6 +173,7 @@ def training_loop(
         fields += [f"cpumem {training_stats.report0('Resources/cpu_mem_gb', psutil.Process(os.getpid()).memory_info().rss / 2**30):<6.2f}"]
         fields += [f"gpumem {training_stats.report0('Resources/peak_gpu_mem_gb', torch.cuda.max_memory_allocated(device) / 2**30):<6.2f}"]
         fields += [f"reserved {training_stats.report0('Resources/peak_gpu_mem_reserved_gb', torch.cuda.max_memory_reserved(device) / 2**30):<6.2f}"]
+        fields += [f"loss {loss.item():.2f}"]
         torch.cuda.reset_peak_memory_stats()
         dist.print0(' '.join(fields))
 
