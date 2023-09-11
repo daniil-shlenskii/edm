@@ -47,7 +47,7 @@ def parse_int_list(s):
 @click.option('--cond',          help='Train class-conditional model', metavar='BOOL',              type=bool, default=False, show_default=True)
 @click.option('--arch',          help='Network architecture', metavar='ddpmpp|ncsnpp|adm',          type=click.Choice(['ddpmpp', 'ncsnpp', 'adm']), default='ddpmpp', show_default=True)
 @click.option('--precond',       help='Preconditioning & loss function', metavar='vp|ve|edm',       type=click.Choice(['vp', 've', 'edm']), default='edm', show_default=True)
-@click.option('--lts',       help='Learn throug sampling', metavar='vp|ve|edm',                     type=bool, default=False, show_default=True)
+@click.option('--lts',           help='Learn throug sampling', metavar='vp|ve|edm',                 type=bool, default=False, show_default=True)
 
 # Hyperparameters.
 @click.option('--duration',      help='Training duration', metavar='MIMG',                          type=click.FloatRange(min=0, min_open=True), default=200, show_default=True)
@@ -60,6 +60,7 @@ def parse_int_list(s):
 @click.option('--dropout',       help='Dropout probability', metavar='FLOAT',                       type=click.FloatRange(min=0, max=1), default=0.13, show_default=True)
 @click.option('--augment',       help='Augment probability', metavar='FLOAT',                       type=click.FloatRange(min=0, max=1), default=0.12, show_default=True)
 @click.option('--xflip',         help='Enable dataset x-flips', metavar='BOOL',                     type=bool, default=False, show_default=True)
+@click.option('--lts_steps',     help='lts option: n_steps for sampling', metavar='INT',            type=int, default=-1)
 
 # Performance-related.
 @click.option('--fp16',          help='Enable mixed-precision training', metavar='BOOL',            type=bool, default=False, show_default=True)
@@ -145,7 +146,7 @@ def main(**kwargs):
         }
         c.loss_kwargs.image_to_timesteps = {
             'class_name': 'training.nn.LearableTimestepsDefault',
-            'n_steps': 12,
+            'n_steps': opts.lts_steps,
         }
         # c.loss_kwargs.encoder = None
 
