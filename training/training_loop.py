@@ -86,6 +86,7 @@ def training_loop(
     # TODO: get encoder and process new loss fn
     loss_fn = dnnlib.util.construct_class_by_name(**loss_kwargs) # training.loss.(VP|VE|EDM)Loss
     if loss_kwargs["class_name"] == "training.loss.LinearKID":
+        print(f"{loss_fn.image_to_timesteps = }")
         optimizer = dnnlib.util.construct_class_by_name(params=loss_fn.image_to_timesteps.parameters(), **optimizer_kwargs) # subclass of torch.optim.Optimizer
     else:
         optimizer = dnnlib.util.construct_class_by_name(params=net.parameters(), **optimizer_kwargs) # subclass of torch.optim.Optimizer
