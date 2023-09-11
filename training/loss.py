@@ -99,7 +99,6 @@ class LinearKID:
         latents = torch.randn_like(images)
         timesteps = self.image_to_timesteps(images)
         xq = self.encoder(images).view(b_size, -1)
-        print(f"{xq.shape}")
         xp = self.encoder(self.sampler(net, latents, timesteps)).view(b_size, -1).to(xq.dtype)
 
         add1 = torch.einsum("is,js->ij", xp, xp)
