@@ -123,7 +123,8 @@ class LinearKID:
 
         add2 = torch.einsum("is,js->ij", xp, xq)
 
-        return add1.mean() - 2 * add2.mean()
+        # return add1.mean() - 2 * add2.mean()
+        return add1, add2
 
     def encoder(self, image: Tensor):
         image = image - image.min()

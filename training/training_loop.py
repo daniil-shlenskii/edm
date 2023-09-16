@@ -83,8 +83,9 @@ def training_loop(
 
     # Setup optimizer.
     dist.print0('Setting up optimizer...')
+    training_through_sampling = loss_kwargs["class_name"] == "training.loss.LinearKID"
     loss_fn = dnnlib.util.construct_class_by_name(**loss_kwargs) # training.loss.(VP|VE|EDM)Loss
-    if loss_kwargs["class_name"] == "training.loss.LinearKID":
+    if training_through_sampling:
         optimizer = dnnlib.util.construct_class_by_name(params=loss_fn.image_to_timesteps.parameters(), **optimizer_kwargs) # subclass of torch.optim.Optimizer
     else:
         optimizer = dnnlib.util.construct_class_by_name(params=net.parameters(), **optimizer_kwargs) # subclass of torch.optim.Optimizer
@@ -131,9 +132,19 @@ def training_loop(
                 images = images.to(device).to(torch.float32) / 127.5 - 1
                 labels = labels.to(device)
                 loss = loss_fn(net=ddp, images=images, labels=labels, augment_pipe=augment_pipe)
-                loss = loss.sum().mul(loss_scaling / batch_gpu_total)
+                if training_through_sampling: # TODO: this part is not checked properly
+                    add1, add2 = loss
+                    add1 = add1.sum().mul(1 / (batch_size * (batch_size - 1)))
+                    add2 = add2.sum().mul(-2 / batch_size**2)
+                    loss = add1 + add2
+                    loss_to_log = add1.item() * ((batch_size * (batch_size - 1)) / (batch_gpu * (batch_gpu - 1))) + \
+                                    add2.item() * batch_size**2 / batch_gpu**2 
+                else:
+                    # loss = loss.sum().mul(loss_scaling / batch_gpu_total) # TODO: was here initially, but seems to be wrong
+                    loss = loss.sum().mul(loss_scaling / batch_size)
+                    loss_to_log = loss.item() * (batch_size / loss_scaling) / batch_gpu
                 loss.backward()
-                training_stats.report('Loss/loss', loss.item())
+                training_stats.report('Loss/loss', loss.item() * batch_size)
 
         # Update weights.
         if not loss_kwargs["class_name"] == "training.loss.LinearKID":
@@ -170,7 +181,8 @@ def training_loop(
         fields += [f"cpumem {training_stats.report0('Resources/cpu_mem_gb', psutil.Process(os.getpid()).memory_info().rss / 2**30):<6.2f}"]
         fields += [f"gpumem {training_stats.report0('Resources/peak_gpu_mem_gb', torch.cuda.max_memory_allocated(device) / 2**30):<6.2f}"]
         fields += [f"reserved {training_stats.report0('Resources/peak_gpu_mem_reserved_gb', torch.cuda.max_memory_reserved(device) / 2**30):<6.2f}"]
-        fields += [f"loss {loss.item():.2f}"]
+        if dist.get_rank() == 0:
+            fields += [f"loss {(loss_to_log):.2f}"]
         torch.cuda.reset_peak_memory_stats()
         dist.print0(' '.join(fields))
 
@@ -180,7 +192,7 @@ def training_loop(
             dist.print0()
             dist.print0('Aborting...')
 
-        if loss_kwargs["class_name"] == "training.loss.LinearKID": # TODO
+        if training_through_sampling: # TODO
             if (snapshot_ticks is not None) and (done or cur_tick % snapshot_ticks == 0) and dist.get_rank() == 0:
                 torch.save(loss_fn.image_to_timesteps.state_dict(), os.path.join(run_dir, f'training-state-{loss_fn.image_to_timesteps.__class__.__name__}-{cur_nimg//1000:06d}.pt'))
         else:
