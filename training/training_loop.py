@@ -83,10 +83,8 @@ def training_loop(
 
     # Setup optimizer.
     dist.print0('Setting up optimizer...')
-    # TODO: get encoder and process new loss fn
     loss_fn = dnnlib.util.construct_class_by_name(**loss_kwargs) # training.loss.(VP|VE|EDM)Loss
     if loss_kwargs["class_name"] == "training.loss.LinearKID":
-        print(f"{loss_fn.image_to_timesteps = }")
         optimizer = dnnlib.util.construct_class_by_name(params=loss_fn.image_to_timesteps.parameters(), **optimizer_kwargs) # subclass of torch.optim.Optimizer
     else:
         optimizer = dnnlib.util.construct_class_by_name(params=net.parameters(), **optimizer_kwargs) # subclass of torch.optim.Optimizer
@@ -95,7 +93,6 @@ def training_loop(
     ema = copy.deepcopy(net).eval().requires_grad_(False)
 
     # Resume training from previous snapshot.
-    # TODO: how to get previous snapshots?
     if resume_pkl is not None:
         dist.print0(f'Loading network weights from "{resume_pkl}"...')
         if dist.get_rank() != 0:
@@ -134,10 +131,9 @@ def training_loop(
                 images = images.to(device).to(torch.float32) / 127.5 - 1
                 labels = labels.to(device)
                 loss = loss_fn(net=ddp, images=images, labels=labels, augment_pipe=augment_pipe)
-
-                training_stats.report('Loss/loss', loss)
                 loss = loss.sum().mul(loss_scaling / batch_gpu_total)
                 loss.backward()
+                training_stats.report('Loss/loss', loss.item())
 
         # Update weights.
         if not loss_kwargs["class_name"] == "training.loss.LinearKID":
@@ -184,23 +180,27 @@ def training_loop(
             dist.print0()
             dist.print0('Aborting...')
 
-        # Save network snapshot.
-        if (snapshot_ticks is not None) and (done or cur_tick % snapshot_ticks == 0):
-            data = dict(ema=ema, loss_fn=loss_fn, augment_pipe=augment_pipe, dataset_kwargs=dict(dataset_kwargs))
-            for key, value in data.items():
-                if isinstance(value, torch.nn.Module):
-                    value = copy.deepcopy(value).eval().requires_grad_(False)
-                    misc.check_ddp_consistency(value)
-                    data[key] = value.cpu()
-                del value # conserve memory
-            if dist.get_rank() == 0:
-                with open(os.path.join(run_dir, f'network-snapshot-{cur_nimg//1000:06d}.pkl'), 'wb') as f:
-                    pickle.dump(data, f)
-            del data # conserve memory
+        if loss_kwargs["class_name"] == "training.loss.LinearKID": # TODO
+            if (snapshot_ticks is not None) and (done or cur_tick % snapshot_ticks == 0) and dist.get_rank() == 0:
+                torch.save(loss_fn.image_to_timesteps.state_dict(), os.path.join(run_dir, f'training-state-{loss_fn.image_to_timesteps.__class__.__name__}-{cur_nimg//1000:06d}.pt'))
+        else:
+            # Save network snapshot.
+            if (snapshot_ticks is not None) and (done or cur_tick % snapshot_ticks == 0):
+                data = dict(ema=ema, loss_fn=loss_fn, augment_pipe=augment_pipe, dataset_kwargs=dict(dataset_kwargs))
+                for key, value in data.items():
+                    if isinstance(value, torch.nn.Module):
+                        value = copy.deepcopy(value).eval().requires_grad_(False)
+                        misc.check_ddp_consistency(value)
+                        data[key] = value.cpu()
+                    del value # conserve memory
+                if dist.get_rank() == 0:
+                    with open(os.path.join(run_dir, f'network-snapshot-{cur_nimg//1000:06d}.pkl'), 'wb') as f:
+                        pickle.dump(data, f)
+                del data # conserve memory
 
-        # Save full dump of the training state.
-        if (state_dump_ticks is not None) and (done or cur_tick % state_dump_ticks == 0) and cur_tick != 0 and dist.get_rank() == 0:
-            torch.save(dict(net=net, optimizer_state=optimizer.state_dict()), os.path.join(run_dir, f'training-state-{cur_nimg//1000:06d}.pt'))
+            # Save full dump of the training state.
+            if (state_dump_ticks is not None) and (done or cur_tick % state_dump_ticks == 0) and cur_tick != 0 and dist.get_rank() == 0:
+                torch.save(dict(net=net, optimizer_state=optimizer.state_dict()), os.path.join(run_dir, f'training-state-{cur_nimg//1000:06d}.pt'))
 
         # Update logs.
         training_stats.default_collector.update()

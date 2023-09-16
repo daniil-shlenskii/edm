@@ -10,7 +10,7 @@
 
 import torch
 import torch.nn.functional as F
-import torchvision.transforms as T
+# import torchvision.transforms as T
 from torch import Tensor
 from torch_utils import persistence
 from training.nn import LearnableTimesteps
@@ -85,12 +85,29 @@ class EDMLoss:
 
 #----------------------------------------------------------------------------
 
+def get_inception_v3_feature_extractor() -> torch.nn.Module:
+    model = torch.hub.load('pytorch/vision:v0.10.0', 'inception_v3', pretrained=True)
+    # model.avgpool = torch.nn.Identity()
+    model.dropout = torch.nn.Identity()
+    model.fc = torch.nn.Identity()
+    model.eval()
+    return model
+
+def normalize(image: Tensor, mean: Tensor, std: Tensor):
+    mean, std = map(
+        lambda x: torch.tensor(x, device=image.device).view(1, -1, 1, 1),
+        [mean, std]
+    )
+    assert image.ndim == 4 and mean.shape == (1, 3, 1, 1)
+    return (image - mean) / std
+
+
 @persistence.persistent_class
 class LinearKID:
     def __init__(self, sampler, image_to_timesteps: LearnableTimesteps):
         self.sampler = sampler
         self.image_to_timesteps = image_to_timesteps
-        self._feature_extractor = self._get_feature_extractor()
+        self._feature_extractor = get_inception_v3_feature_extractor()
     
     def __call__(self, net, images, labels=None, augment_pipe=None):
         if next(self._feature_extractor.parameters()).device != images.device:
@@ -100,7 +117,7 @@ class LinearKID:
         timesteps = self.image_to_timesteps(images)
         xq = self.encoder(images).view(b_size, -1)
         xp = self.encoder(self.sampler(net, latents, timesteps)).view(b_size, -1).to(xq.dtype)
-
+        
         add1 = torch.einsum("is,js->ij", xp, xp)
         add1 = add1 - torch.diag(torch.diag(add1))
 
@@ -108,17 +125,9 @@ class LinearKID:
 
         return add1.mean() - 2 * add2.mean()
 
-    def _get_feature_extractor(self):
-        model = torch.hub.load('pytorch/vision:v0.10.0', 'inception_v3', pretrained=True)
-        # model.avgpool = torch.nn.Identity()
-        model.dropout = torch.nn.Identity()
-        model.fc = torch.nn.Identity()
-        model.eval()
-        return model
-
     def encoder(self, image: Tensor):
         image = image - image.min()
         image = image / image.max()
         image = F.interpolate(image, size=(224, 224), mode="area")
-        image = T.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225))(image)
+        image = normalize(image, mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225))
         return self._feature_extractor(image)
