@@ -194,7 +194,9 @@ def training_loop(
 
         if training_through_sampling: # TODO
             if (snapshot_ticks is not None) and (done or cur_tick % snapshot_ticks == 0) and dist.get_rank() == 0:
-                torch.save(loss_fn.image_to_timesteps.state_dict(), os.path.join(run_dir, f'training-state-{loss_fn.image_to_timesteps.__class__.__name__}-{cur_nimg//1000:06d}.pt'))
+                save_path = os.path.join(run_dir, f'training-state-{loss_fn.image_to_timesteps.__class__.__name__}-{cur_nimg//1000:06d}.pt')
+                torch.save(loss_fn.image_to_timesteps.state_dict(), save_path)
+                print(f"state_dict saved: {os.path.join(run_dir, f'training-state-{loss_fn.image_to_timesteps.__class__.__name__}-{cur_nimg//1000:06d}.pt')}")
         else:
             # Save network snapshot.
             if (snapshot_ticks is not None) and (done or cur_tick % snapshot_ticks == 0):
