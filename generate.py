@@ -18,6 +18,8 @@ import torch
 import PIL.Image
 import dnnlib
 from torch_utils import distributed as dist
+from training.nn import LearableTimestepsDefault
+from samplers import Sampler
 
 #----------------------------------------------------------------------------
 # Proposed EDM sampler (Algorithm 2).
@@ -221,6 +223,9 @@ def parse_int_list(s):
 @click.option('--class', 'class_idx',      help='Class label  [default: random]', metavar='INT',                    type=click.IntRange(min=0), default=None)
 @click.option('--batch', 'max_batch_size', help='Maximum batch size', metavar='INT',                                type=click.IntRange(min=1), default=64, show_default=True)
 
+@click.option('--sampler_name',            help='Name of predefined sampler', metavar='STR',                        type=str,)
+@click.option('--timesteps_path',               help='...', metavar='PATH',                                         type=str,)
+
 @click.option('--steps', 'num_steps',      help='Number of sampling steps', metavar='INT',                          type=click.IntRange(min=1), default=18, show_default=True)
 @click.option('--sigma_min',               help='Lowest noise level  [default: varies]', metavar='FLOAT',           type=click.FloatRange(min=0, min_open=True))
 @click.option('--sigma_max',               help='Highest noise level  [default: varies]', metavar='FLOAT',          type=click.FloatRange(min=0, min_open=True))
@@ -288,10 +293,24 @@ def main(network_pkl, outdir, subdirs, seeds, class_idx, max_batch_size, device=
             class_labels[:, class_idx] = 1
 
         # Generate images.
-        sampler_kwargs = {key: value for key, value in sampler_kwargs.items() if value is not None}
-        have_ablation_kwargs = any(x in sampler_kwargs for x in ['solver', 'discretization', 'schedule', 'scaling'])
-        sampler_fn = ablation_sampler if have_ablation_kwargs else edm_sampler
-        images = sampler_fn(net, latents, class_labels, randn_like=rnd.randn_like, **sampler_kwargs)
+        if sampler_kwargs.get("sampler_name") is not None:
+            sampler = Sampler(sampler_kwargs["sampler_name"])
+            if sampler_kwargs.get("timesteps_path") is None:
+                timesteps = None
+            elif sampler_kwargs["timesteps_path"] == "":
+                ltd = LearableTimestepsDefault(sampler_kwargs["num_steps"])
+                timesteps = ltd().to(latents.device).detach()
+            else:
+                state_dict = torch.load(sampler_kwargs["timesteps_path"])
+                ltd = LearableTimestepsDefault(len(state_dict["v"]) + 1)
+                ltd.load_state_dict(state_dict)
+                timesteps = ltd().to(latents.device).detach()
+            images = sampler(net, latents, timesteps, class_labels=class_labels)
+        else:
+            sampler_kwargs = {key: value for key, value in sampler_kwargs.items() if value is not None}
+            have_ablation_kwargs = any(x in sampler_kwargs for x in ['solver', 'discretization', 'schedule', 'scaling'])
+            sampler_fn = ablation_sampler if have_ablation_kwargs else edm_sampler
+            images = sampler_fn(net, latents, class_labels, randn_like=rnd.randn_like, **sampler_kwargs)
 
         # Save images.
         images_np = (images * 127.5 + 128).clip(0, 255).to(torch.uint8).permute(0, 2, 3, 1).cpu().numpy()
